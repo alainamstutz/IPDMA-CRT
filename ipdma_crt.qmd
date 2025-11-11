@@ -1,0 +1,776 @@
+---
+title: "IPDMA-CRT methodological study"
+author: "Amstutz Alain"
+format:
+  html:
+    toc: true
+    toc-float: true
+    toc-depth: 4 # show up to 4 sub-levels in md table of content
+    code-fold: true
+    keep-md: true
+  pdf:
+    toc: true
+editor: visual
+---
+
+*Preliminary data 10.11.2025*
+
+**Packages**
+
+```{r}
+#| message: false
+#| warning: false
+req_pkgs <- c("readxl",
+              "tidyverse",
+              "here",
+              "ggplot2",
+              "ggalluvial",
+              "gtsummary", # baseline table
+              "forcats", # ordering function
+              "scales" # likert plot
+)
+install_if_missing <- function(pkgs){
+  for(p in pkgs){
+    if(!requireNamespace(p, quietly=TRUE)){
+      install.packages(p, repos="https://cloud.r-project.org")
+    }
+    library(p, character.only=TRUE)
+  }
+}
+install_if_missing(req_pkgs)
+```
+
+# **(1) Dataset formatting**
+
+```{r}
+# Import
+df <- read_excel(here("IPDMA_CRT_extraction_10112025.xlsx"))
+
+df$`State Of Play Covidence #` <- as.factor(df$`State Of Play Covidence #`)
+    
+# Recode the comparator group description levels
+df <- df %>%
+  mutate(
+    `Comparator category` = case_when(
+      str_detect(`Describe Comparator`, regex("placebo", ignore_case = TRUE)) ~ "Placebo or usual care",
+      `Describe Comparator` %in% c("iron and folic acid supplements only", "Saline") ~ "Active Comparator",
+      TRUE ~ "Usual care"
+    )
+  )
+
+# Recode the intervention group description levels
+df <- df %>%
+  mutate(
+    `Intervention category` = case_when(
+      `Intervention category` == "Behavioural" ~ "Behavioural (lifestyle, psychological, exercise)",
+      `Intervention category` == "Rehabilitation" ~ "Behavioural (lifestyle, psychological, exercise)",
+      TRUE ~ `Intervention category`
+    )
+  )
+
+# Rename the medical field level
+df <- df %>%
+  mutate(
+    `Medical field` = case_when(
+      `Medical field` == "Cardiovascular/Cardiac" ~ "Cardiovascular",
+      TRUE ~ `Medical field`
+    )
+  )
+
+# Rename variables
+df <- df %>%
+  rename(
+    `ICC reported` = `ICC or any other measure of between-cluster variability for at least one of the pooled outcomes (incuding CRTs) reported`,
+    `CRTs labeled as CRTs` = `CRTs flagged as CRT in ‘Characteristics of included studies’ table`,
+    `Analysis framework` = `Analysis framework for the main IPDMA analysis`,
+    `Analysis approach` = `Main IPDMA analysis approach`,
+    `Treatment effect model` = `Main IPDMA analysis model regarding treatment effect`,
+    `Accounted for two-level clustering` = `Do the authors account for the two-level clustering, i.e., CRT-level (clusters within CRT(s)) and IPDMA-level (pooling of trials)?`,
+    `CRT-level estimator` = `If two-stage, what estimator do the authors use to account for clustering at the CRT-level`,
+    `Small sample correction` = `Do the authors report any correction in case of low cluster number in any of the involved CRTs (\"small sample correction\")?`,
+    `CRT vs IRT analysis` = `Any subgroup analysis/meta-regression performed based on study design (CRTs vs individual RCTs)?`,
+    `Covariate adjustment` = `Any covariate adjustment applied for the main analysis?`,
+    `Risk of bias` = `Any risk of bias assessment done?`,
+    `CRT-specific risk of bias` = `If RoB done, any CRT-specific risk of biases assessed?`,
+  )
+
+# Recode the CRT-specific risk of bias variable by explicitly showing Unknown
+df <- df %>%
+  mutate(
+    `CRT-specific risk of bias` = case_when(
+      is.na(`CRT-specific risk of bias`) ~ "Not applicable",
+      TRUE ~ `CRT-specific risk of bias`))
+
+# Create long dataset to work with CRT/IPDMA format
+df_long <- df %>%
+  pivot_longer(
+    cols = matches("^CRT[0-9]+:"),
+    names_to = c("CRT", ".value"),
+    names_pattern = "(CRT[0-9]+): (.*)"
+  )
+df_long <- df_long %>%
+  filter(!is.na(`name/ID`))
+
+# Rename the consent variable
+df_long <- df_long %>%
+  mutate(
+    `Consent procedure` = case_when(
+      `Consent procedure` == "Passive consent (Participation occurs unless they actively refuse “opt-out”)" ~ "Passive consent",
+      `Consent procedure` == "Waiver of consent (No consent sought/communicated to participants)" ~ "Waiver of consent",
+      `Consent procedure` == "Active consent (Participant must explicitly agree “opt-in”)" ~ "Active consent",
+      TRUE ~ `Consent procedure`
+    )
+  )
+
+```
+
+# **(2) Baseline table**
+
+```{r}
+baseline_vars <- c(
+  # "Location of corresponding author",
+  # "Cochrane review?",
+  "Medical field",
+  "Intervention category",
+  "Comparator category"
+)
+
+baseline_table <-
+  df %>%
+  select(all_of(baseline_vars)) %>%
+  mutate(across(
+    everything(),
+    ~ fct_infreq(factor(.))   # reorder each variable by decreasing count
+  )) %>%
+  tbl_summary(
+    missing = "ifany",
+    type = all_categorical() ~ "categorical",
+    statistic = all_categorical() ~ "{n} ({p}%)"
+  ) %>%
+  modify_header(label = "**IPDMA Characteristics**") %>%
+  bold_labels()
+
+baseline_table
+```
+
+# **(3) Sankey for IPDMA key characteristics**
+
+```{r}
+#| fig-height: 9
+#| fig-width: 10
+# build summarized data
+alluvial_df <- df %>%
+  select(`Intervention category`, `Comparator category`, `Medical field`) %>%
+  filter(complete.cases(.)) %>%
+  count(`Medical field`, `Intervention category`, `Comparator category`)
+
+# First order by total frequency
+medical_freq <- alluvial_df %>%
+  group_by(`Medical field`) %>%
+  summarise(total = sum(n), .groups = "drop") %>%
+  arrange(desc(total))
+
+# Define custom priority for those with total = 1
+custom_order_1 <- c(
+  "Primary Care / Public Health",
+  "Rheumatology",
+  "Endocrinology",
+  "Intensive Care",
+  "Gynecology / Obstetrics",
+  "Dermatology"
+)
+
+# Create final ordering vector:
+# Psychiatry first among the >=2 group, then custom order for the 1-count group
+final_medical_order <- c(
+  medical_freq$`Medical field`[medical_freq$total > 1],
+  custom_order_1
+)
+
+# reorder Intervention category with Drug/Product/Device on top
+intervention_levels <- alluvial_df %>%
+  distinct(`Intervention category`) %>%
+  pull()
+
+# reorder factor: Drug/Product/Device first, then the rest
+final_intervention_order <- c("Drug/Product/Device", setdiff(intervention_levels, "Drug/Product/Device"))
+
+# Apply factor releveling
+alluvial_df <- alluvial_df %>%
+  mutate(
+    `Medical field` = factor(`Medical field`, levels = final_medical_order),
+    `Intervention category` = factor(`Intervention category`, levels = final_intervention_order))
+
+# determine axis tick range
+max_n <- 14
+
+ggplot(alluvial_df,
+       aes(axis1 = `Medical field`,
+           axis2 = `Intervention category`,
+           axis3 = `Comparator category`,
+           y = n)) +
+  geom_alluvium(aes(fill = `Intervention category`), width = 0.25) +
+  geom_stratum(width = 0.25) +
+  geom_label(stat = "stratum", aes(label = after_stat(stratum))) +
+  scale_x_discrete(limits = c("Medical Field", "Intervention", "Comparator")) +
+  scale_y_continuous(breaks = seq(0, max_n, by = 1)) +
+  theme_minimal(base_size = 14) +
+  theme(
+    legend.position = "none",
+    panel.grid.minor = element_blank(), # remove horizontal helper lines
+    panel.grid.major.x = element_blank(), # remove vertical lines
+    panel.grid.major.y = element_line(color = "grey80"),
+    plot.background = element_blank(),
+    panel.background = element_blank(),
+    # axis.title.x = element_blank(),
+    # axis.text.x = element_text(size = 12),
+    # axis.text.y = element_text(size = 12),
+    # force tight plot wrapping (to fix Quarto spacing)
+    plot.margin = margin(t = 10, r = 5, b = 5, l = 5)
+  ) +
+  labs(
+    y = "Number of IPDMAs"
+  ) 
+
+```
+
+# **(4) Number of CRTs & CRT participants per IPDMA**
+
+```{r}
+# Select CRT participant columns
+crt_part_cols <- grep("CRT[0-9]+: number of participants randomized", names(df), value = TRUE)
+
+# Calculate total participants in CRTs per IPDMA
+df <- df %>%
+  rowwise() %>%
+  mutate(
+    total_CRT_participants = sum(c_across(all_of(crt_part_cols)), na.rm = TRUE)
+  ) %>%
+  ungroup()
+
+# Calculate CRT trial and CRT participant percentages per IPDMA
+df <- df %>%
+  mutate(
+    pct_trials_CRT = (`Of RCTs with IPD obtained, number of CRTs` /
+                      `Number of eligible trials for which IPD were obtained and included in the MA`) * 100,
+    pct_participants_CRT = total_CRT_participants / 
+                           `Number of eligible participants for which IPD were obtained and included in the MA` * 100
+  ) %>%
+  mutate(IPDMA_index = 1:n())
+
+# Calculate overall percentages
+overall_pct_trials <- sum(df$`Of RCTs with IPD obtained, number of CRTs`) /
+                      sum(df$`Number of eligible trials for which IPD were obtained and included in the MA`) * 100
+
+overall_pct_participants <- sum(df$total_CRT_participants, na.rm = TRUE) /
+                            sum(df$`Number of eligible participants for which IPD were obtained and included in the MA`) * 100
+
+
+# Create data for stacked bars
+crt_stacked <- df %>%
+  mutate(
+    n_nonCRT = `Number of eligible trials for which IPD were obtained and included in the MA` - `Of RCTs with IPD obtained, number of CRTs`,
+    pct_nonCRT = 100 - pct_trials_CRT,
+    n_nonCRT_participants = `Number of eligible participants for which IPD were obtained and included in the MA` - total_CRT_participants,
+    pct_nonCRT_participants = 100 - pct_participants_CRT
+  )
+
+# Stacked plot for trials
+trial_stack_df <- crt_stacked %>%
+  select(IPDMA_index, `Of RCTs with IPD obtained, number of CRTs`, n_nonCRT, pct_trials_CRT, pct_nonCRT) %>%
+  pivot_longer(cols = c(`Of RCTs with IPD obtained, number of CRTs`, n_nonCRT), names_to = "Type", values_to = "Count") %>%
+  mutate(
+    pct = ifelse(Type == "Of RCTs with IPD obtained, number of CRTs", pct_trials_CRT, pct_nonCRT),
+    Type = factor(Type, levels = c("n_nonCRT", "Of RCTs with IPD obtained, number of CRTs"), labels = c("Non-CRT", "CRT"))
+  )
+
+ggplot(trial_stack_df, aes(x = IPDMA_index, y = pct, fill = Type)) +
+  geom_col(color = "white", linewidth = 0.2) +
+    geom_hline(yintercept = overall_pct_trials, linetype = "dashed", color = "darkgrey", linewidth = 1) +
+  geom_text(aes(label = Count), 
+            position = position_stack(vjust = 0.5), size = 3, color = "white") +
+  scale_fill_manual(values = c("Non-CRT" = "#b0c4de", "CRT" = "#2E8B57")) +
+  scale_x_continuous(breaks = 1:14) +
+  scale_y_continuous(limits = c(0, 100)) +
+  labs(
+    x = "IPDMA",
+    y = "Percentage of trials",
+    fill = NULL,
+    title = "CRT vs Non-CRT trials per IPDMA",
+    caption = "Counts in stacked bars, percentage on y-axis"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 0, hjust = 0.5),
+    plot.caption = element_text(hjust = 0)
+  )
+
+
+# Stacked plot for participants
+participant_stack_df <- crt_stacked %>%
+  select(IPDMA_index, total_CRT_participants, n_nonCRT_participants, pct_participants_CRT, pct_nonCRT_participants) %>%
+  pivot_longer(cols = c(total_CRT_participants, n_nonCRT_participants), names_to = "Type", values_to = "Count") %>%
+  mutate(
+    pct = ifelse(Type == "total_CRT_participants", pct_participants_CRT, pct_nonCRT_participants),
+    Type = factor(Type, levels = c("n_nonCRT_participants", "total_CRT_participants"), labels = c("Non-CRT participants", "CRT participants"))
+  )
+
+ggplot(participant_stack_df, aes(x = IPDMA_index, y = pct, fill = Type)) +
+  geom_col(color = "white", linewidth = 0.2) +
+  geom_hline(yintercept = overall_pct_participants, linetype = "dashed", color = "darkgrey", linewidth = 1) +
+  geom_text(aes(label = Count), 
+            position = position_stack(vjust = 0.5), size = 3, color = "white") +
+  scale_fill_manual(values = c("Non-CRT participants" = "#b0c4de", "CRT participants" = "#2E8B57")) +
+  scale_x_continuous(breaks = 1:14) +
+  scale_y_continuous(limits = c(0, 100)) +
+  labs(
+    x = "IPDMA",
+    y = "Percentage of participants",
+    fill = NULL,
+    title = "CRT vs Non-CRT participants per IPDMA",
+    caption = "Counts in stacked bars, percentage on y-axis"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 0, hjust = 0.5),
+    plot.caption = element_text(hjust = 0)
+  )
+
+# Cluster design
+# df_long %>%
+#   count(`cluster design`, sort = TRUE)
+
+```
+
+# **(5) Details regarding CRTs**
+
+```{r}
+#| fig-height: 9
+#| fig-width: 10
+# Summarize CRT-level characteristics
+crt_sankey <- df_long %>%
+  filter(!is.na(`Order of recruitment and randomization`),
+         !is.na(`Consent procedure`)) %>%
+  count(`Order of recruitment and randomization`,
+        `Consent procedure`)
+
+crt_sankey <- crt_sankey %>%
+  mutate(
+    `Order of recruitment and randomization` =
+      fct_infreq(`Order of recruitment and randomization`),
+    `Consent procedure` =
+      fct_infreq(`Consent procedure`)
+  )
+
+# determine axis tick range
+max_n <- 43
+
+ggplot(crt_sankey,
+       aes(axis1 = `Order of recruitment and randomization`,
+           axis2 = `Consent procedure`,
+           y = n)) +
+  geom_alluvium(aes(fill = `Order of recruitment and randomization`),
+                width = 0.18, alpha = 0.85) +
+  geom_stratum(width = 0.18, color = "black", fill = "grey90") +
+  geom_label(stat = "stratum", aes(label = after_stat(stratum)),
+             size = 4, label.padding = unit(0.15, "lines")) +
+  scale_x_discrete(
+    limits = c("Order of recruitment & randomization", "Consent procedure"),
+    expand = c(0.3, 0.3) # adjust extra space on x-axis!!
+  ) +
+  scale_y_continuous(
+    name = "Number of CRTs",
+    breaks = seq(0, max_n, by = 1),
+    expand = c(0, 0) # no padding above/below
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    legend.position = "none",
+    panel.grid.minor = element_blank(),
+    panel.grid.major.x = element_blank(), # remove vertical lines
+    panel.grid.major.y = element_line(color = "grey80"),
+    plot.background = element_blank(),
+    panel.background = element_blank(),
+    axis.title.x = element_blank(),
+    axis.text.x = element_text(size = 12),
+    axis.text.y = element_text(size = 12),
+    # force tight plot wrapping (fixes Quarto spacing)
+    plot.margin = margin(t = 10, r = 5, b = 5, l = 5)
+  )
+
+```
+
+# **(6) Details regarding IPDMA-CRT: Reporting**
+
+```{r}
+vars_reporting <- c(
+  "ICC reported",
+  "CRTs labeled as CRTs",
+  "Risk of bias",
+  "CRT-specific risk of bias"
+)
+
+# ensure variables exist
+vars_exist <- vars_reporting %in% names(df)
+if(!all(vars_exist)) {
+  message("Warning: some variable names were not found. Missing: ",
+          paste(vars_reporting[!vars_exist], collapse = "; "))
+}
+
+# create and display gtsummary table
+tbl_reporting <- df %>%
+  select(any_of(vars_reporting)) %>%
+  mutate(across(everything(), ~ fct_infreq(factor(.)))) %>%
+  tbl_summary(
+    missing = "ifany",
+    type = all_categorical() ~ "categorical",
+    statistic = all_categorical() ~ "{n} ({p}%)"
+  ) %>%
+  modify_header(label = "**IPDMA reporting characteristics**") %>%
+  bold_labels()
+
+tbl_reporting
+
+# Reshape and calculate percentages
+likert_df <- df %>%
+  select(any_of(vars_reporting)) %>%
+  pivot_longer(everything(), names_to = "Variable", values_to = "Category") %>%
+  filter(!is.na(Category)) %>%
+  mutate(
+    # enforce left to right ordering of stack
+    Category = factor(Category, levels = c("Yes", "No", "Not applicable")),
+    # control order (top-down)
+    Variable = factor(Variable, levels = rev(vars_reporting))
+  ) %>%
+  count(Variable, Category) %>%
+  group_by(Variable) %>%
+  mutate(percent = n / sum(n) * 100) %>%
+  ungroup()
+
+category_colors <- c(
+  "Yes" = "#2E8B57",
+  "No" = "#D95F02",
+  "Not applicable" = "#E0E0E0"
+)
+
+# Plot
+ggplot(likert_df, aes(x = Variable, y = percent, fill = Category)) +
+  geom_col(position = "fill", color = "white", linewidth = 0.2) +
+  geom_text(aes(label = n),
+            position = position_fill(vjust = 0.5),
+            color = "white", size = 3) +
+  coord_flip() +
+  scale_fill_manual(values = category_colors, drop = FALSE) +
+  scale_y_continuous(labels = scales::percent_format(scale = 100)) +  # fix
+  labs(x = NULL, y = NULL, fill = NULL, title = "Reporting characteristics") +
+  theme_minimal(base_size = 13) +
+  theme(
+    axis.text.x = element_text(size = 11),
+    axis.text.y = element_text(size = 11),
+    legend.position = "bottom",
+    panel.grid.major.y = element_blank()
+  )
+
+```
+
+# **(7) Details regarding IPDMA-CRT: Analysis 1**
+
+```{r}
+vars_analysis <- c(
+  "Type of Primary Outcome(s)",
+  "Analysis framework",
+  "Treatment effect model",
+  "CRT vs IRT analysis"
+  # "CRT-level estimator",
+  # "Small sample correction",
+  # "Covariate adjustment",
+)
+
+# ensure variables exist
+vars_exist <- vars_analysis %in% names(df)
+if(!all(vars_exist)) {
+  message("Warning: some variable names were not found. Missing: ",
+          paste(vars_analysis[!vars_exist], collapse = "; "))
+}
+
+# create and display gtsummary table
+tbl_analysis <- df %>%
+  select(any_of(vars_analysis)) %>%
+  mutate(across(everything(), ~ fct_infreq(factor(.)))) %>%
+  tbl_summary(
+    missing = "ifany",
+    type = all_categorical() ~ "categorical",
+    statistic = all_categorical() ~ "{n} ({p}%)"
+  ) %>%
+  modify_header(label = "**IPDMA analysis characteristics**") %>%
+  bold_labels()
+
+tbl_analysis
+
+# # Reshape and calculate percentages
+# likert_df <- df %>%
+#   select(any_of(vars_analysis)) %>%
+#   pivot_longer(everything(), names_to = "Variable", values_to = "Category") %>%
+#   filter(!is.na(Category)) %>%
+#   mutate(
+#     # control order (top-down)
+#     Variable = factor(Variable, levels = rev(vars_analysis))
+#   ) %>%
+#   count(Variable, Category) %>%
+#   group_by(Variable) %>%
+#   mutate(percent = n / sum(n) * 100) %>%
+#   ungroup()
+# 
+# # Define legend order
+# category_levels <- c(
+#   "Continuous", "Binary", "Ordinal", "Time-to-event", "Combination",
+#   "Frequentist", "Bayesian",
+#   "Fixed", "Random",
+#   "No", "Yes"
+# )
+# 
+# category_colors <- c(
+#   "Continuous" = "#1f78b4",
+#   "Binary" = "#4a9bdc",
+#   "Ordinal" = "#6a5acd",
+#   "Time-to-event" = "#7442C8",
+#   "Combination" = "#9b59b6",
+#   "Frequentist" = "#e41a1c",
+#   "Bayesian" = "#ff7f00",
+#   "Fixed" = "#c69c6d",
+#   "Random" = "#8f6b42",
+#   "No" = "#D95F02",
+#   "Yes" = "#2E8B57"
+# )
+# 
+# # Convert Category to ordered factor
+# likert_df <- likert_df %>%
+#   mutate(Category = factor(Category, levels = category_levels))
+# 
+# # Plot
+# ggplot(likert_df, aes(x = Variable, y = percent, fill = Category)) +
+#   geom_col(position = "fill", color = "white", linewidth = 0.2) +
+#   geom_text(aes(label = n),
+#             position = position_fill(vjust = 0.5),
+#             color = "white", size = 3) +
+#   coord_flip() +
+#   scale_fill_manual(values = category_colors, drop = FALSE) +
+#   scale_y_continuous(labels = scales::percent_format(scale = 100)) +
+#   labs(x = NULL, y = NULL, fill = NULL, title = "Reporting characteristics") +
+#   theme_minimal(base_size = 13) +
+#   theme(
+#     axis.text.x = element_text(size = 11),
+#     axis.text.y = element_text(size = 11),
+#     legend.position = "bottom",
+#     panel.grid.major.y = element_blank()
+#   )
+
+```
+
+# **(8) Details regarding IPDMA-CRT: Analysis 2**
+
+```{r}
+#| fig-height: 6
+#| fig-width: 7
+vars_analysis2 <- c(
+  "Analysis approach",
+  "Accounted for two-level clustering"
+)
+
+# ensure variables exist
+vars_exist <- vars_analysis2 %in% names(df)
+if(!all(vars_exist)) {
+  message("Warning: some variable names were not found. Missing: ",
+          paste(vars_analysis2[!vars_exist], collapse = "; "))
+}
+
+# create and display gtsummary table
+tbl_analysis2 <- df %>%
+  select(any_of(vars_analysis2)) %>%
+  mutate(across(everything(), ~ fct_infreq(factor(.)))) %>%
+  tbl_summary(
+    missing = "ifany",
+    type = all_categorical() ~ "categorical",
+    statistic = all_categorical() ~ "{n} ({p}%)"
+  ) %>%
+  modify_header(label = "**IPDMA analysis characteristics**") %>%
+  bold_labels()
+
+tbl_analysis2
+
+# Summarize CRT-level characteristics
+sankey_analysis2 <- df %>%
+  count(`Accounted for two-level clustering`,
+        `Analysis approach`,)
+
+sankey_analysis2 <- sankey_analysis2 %>%
+  mutate(
+    `Accounted for two-level clustering` =
+      fct_infreq(`Accounted for two-level clustering`),
+    `Analysis approach` =
+      fct_infreq(`Analysis approach`)
+  )
+
+# determine axis tick range
+max_n <- 14
+
+ggplot(sankey_analysis2,
+       aes(axis1 = `Accounted for two-level clustering`,
+           axis2 = `Analysis approach`,
+           y = n)) +
+  geom_alluvium(aes(fill = `Accounted for two-level clustering`),
+                width = 0.18, alpha = 0.85) +
+  geom_stratum(width = 0.18, color = "black", fill = "grey90") +
+  geom_label(stat = "stratum", aes(label = after_stat(stratum)),
+             size = 4, label.padding = unit(0.15, "lines")) +
+  scale_x_discrete(
+    limits = c("Accounted for two-level clustering", "Analysis approach"),
+    expand = c(0.3, 0.3) # adjust extra space on x-axis!!
+  ) +
+  scale_y_continuous(
+    name = "Number of IPDMAs",
+    breaks = seq(0, max_n, by = 1),
+    expand = c(0, 0) # no padding above/below
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    legend.position = "none",
+    panel.grid.minor = element_blank(),
+    panel.grid.major.x = element_blank(), # remove vertical lines
+    panel.grid.major.y = element_line(color = "grey80"),
+    plot.background = element_blank(),
+    panel.background = element_blank(),
+    axis.title.x = element_blank(),
+    axis.text.x = element_text(size = 12),
+    axis.text.y = element_text(size = 12),
+    # force tight plot wrapping (fixes Quarto spacing)
+    plot.margin = margin(t = 10, r = 5, b = 5, l = 5)
+  )
+
+```
+
+# **(9) Details regarding the IPDMAs that did not account for CRT-level clustering**
+
+```{r}
+crt_stacked_no_clustering <- crt_stacked %>% 
+  filter(`Accounted for two-level clustering` == "No") %>%
+  mutate(IPDMA_index = 1:n())
+
+# Stacked plot for trials
+trial_stack_df <- crt_stacked_no_clustering %>%
+  select(IPDMA_index, `Of RCTs with IPD obtained, number of CRTs`, n_nonCRT, pct_trials_CRT, pct_nonCRT) %>%
+  pivot_longer(cols = c(`Of RCTs with IPD obtained, number of CRTs`, n_nonCRT), names_to = "Type", values_to = "Count") %>%
+  mutate(
+    pct = ifelse(Type == "Of RCTs with IPD obtained, number of CRTs", pct_trials_CRT, pct_nonCRT),
+    Type = factor(Type, levels = c("n_nonCRT", "Of RCTs with IPD obtained, number of CRTs"), labels = c("Non-CRT", "CRT"))
+  )
+
+ggplot(trial_stack_df, aes(x = IPDMA_index, y = pct, fill = Type)) +
+  geom_col(color = "white", linewidth = 0.2) +
+  geom_text(aes(label = Count), 
+            position = position_stack(vjust = 0.5), size = 3, color = "white") +
+  scale_fill_manual(values = c("Non-CRT" = "#b0c4de", "CRT" = "#2E8B57")) +
+  # scale_x_continuous(breaks = 1:14) +
+  scale_y_continuous(limits = c(0, 100)) +
+  labs(
+    x = "IPDMA",
+    y = "Percentage of trials",
+    fill = NULL,
+    title = "CRT vs Non-CRT trials per IPDMA",
+    caption = "Counts in stacked bars, percentage on y-axis"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 0, hjust = 0.5),
+    plot.caption = element_text(hjust = 0)
+  )
+
+# Stacked plot for participants
+participant_stack_df <- crt_stacked_no_clustering %>%
+  select(IPDMA_index, total_CRT_participants, n_nonCRT_participants, pct_participants_CRT, pct_nonCRT_participants) %>%
+  pivot_longer(cols = c(total_CRT_participants, n_nonCRT_participants), names_to = "Type", values_to = "Count") %>%
+  mutate(
+    pct = ifelse(Type == "total_CRT_participants", pct_participants_CRT, pct_nonCRT_participants),
+    Type = factor(Type, levels = c("n_nonCRT_participants", "total_CRT_participants"), labels = c("Non-CRT participants", "CRT participants"))
+  )
+
+ggplot(participant_stack_df, aes(x = IPDMA_index, y = pct, fill = Type)) +
+  geom_col(color = "white", linewidth = 0.2) +
+  geom_text(aes(label = Count), 
+            position = position_stack(vjust = 0.5), size = 3, color = "white") +
+  scale_fill_manual(values = c("Non-CRT participants" = "#b0c4de", "CRT participants" = "#2E8B57")) +
+  # scale_x_continuous(breaks = 1:14) +
+  scale_y_continuous(limits = c(0, 100)) +
+  labs(
+    x = "IPDMA",
+    y = "Percentage of participants",
+    fill = NULL,
+    title = "CRT vs Non-CRT participants per IPDMA",
+    caption = "Counts in stacked bars, percentage on y-axis"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 0, hjust = 0.5),
+    plot.caption = element_text(hjust = 0)
+  )
+
+
+```
+
+# **(10) Details regarding the IPDMAs with one-stage approach that aimed to account for clustering**
+
+```{r}
+crt_stacked_onestage <- crt_stacked %>% 
+  filter(`Accounted for two-level clustering` == "Yes" & `Analysis approach` == "One-stage") %>%
+  mutate(IPDMA_index = 1:n())
+
+df_onestage <- df %>% 
+  filter(`Accounted for two-level clustering` == "Yes" & `Analysis approach` == "One-stage")
+
+```
+
+IPDMA #1:
+
+-   Binary outcome
+
+-   Bayesian model with two hierarchical layers:
+
+    -   trial-level intercept
+
+    -   cluster/ICU-level intercepts nested within trials
+
+-   Intervention as fixed effect
+
+-   The model adjusts SEs to account for correlation - where it exists:
+
+    -   For IRTs: treatment independent, SEs stay small
+
+    -   For CRTs: treatment clustered, SEs inflated accordingly
+
+IPDMA #2 & #3:
+
+-   Time-to-event outcome
+
+-   Cox PH shared frailty model with random effects for clusters/centres
+
+-   Intervention as fixed effect
+
+-   Unclear if a single baseline hazard across all trials is assumed, or if this has been considered by:
+
+    -   stratifying baseline hazards by trial, or
+
+    -   including study-level frailties/random effects
+
+IPDMA #4:
+
+-   Continuous outcome
+
+-   Generalized Estimating Equations and trial as fixed factor (separate intercepts)
+
+-   Intervention as fixed effect
+
+-   The model adjusts SEs to account for correlation - where it exists:
+
+    -   For IRTs: treatment independent, SEs stay small
+
+    -   For CRTs: treatment clustered, SEs inflated accordingly
