@@ -13,7 +13,7 @@ format:
 editor: visual
 ---
 
-*Preliminary data 10.11.2025*
+*! Preliminary data & results ! 10.11.2025*
 
 **Packages**
 
@@ -24,8 +24,8 @@ req_pkgs <- c("readxl",
               "tidyverse",
               "here",
               "ggplot2",
-              "ggalluvial",
-              "gtsummary", # baseline table
+              "ggalluvial", # sankey
+              "gtsummary",
               "forcats", # ordering function
               "scales" # likert plot
 )
@@ -140,7 +140,7 @@ baseline_table <-
   select(all_of(baseline_vars)) %>%
   mutate(across(
     everything(),
-    ~ fct_infreq(factor(.))   # reorder each variable by decreasing count
+    ~ fct_infreq(factor(.))
   )) %>%
   tbl_summary(
     missing = "ifany",
@@ -158,7 +158,7 @@ baseline_table
 ```{r}
 #| fig-height: 9
 #| fig-width: 10
-# build summarized data
+# summarized data
 alluvial_df <- df %>%
   select(`Intervention category`, `Comparator category`, `Medical field`) %>%
   filter(complete.cases(.)) %>%
@@ -191,8 +191,6 @@ final_medical_order <- c(
 intervention_levels <- alluvial_df %>%
   distinct(`Intervention category`) %>%
   pull()
-
-# reorder factor: Drug/Product/Device first, then the rest
 final_intervention_order <- c("Drug/Product/Device", setdiff(intervention_levels, "Drug/Product/Device"))
 
 # Apply factor releveling
@@ -305,7 +303,6 @@ ggplot(trial_stack_df, aes(x = IPDMA_index, y = pct, fill = Type)) +
     plot.caption = element_text(hjust = 0)
   )
 
-
 # Stacked plot for participants
 participant_stack_df <- crt_stacked %>%
   select(IPDMA_index, total_CRT_participants, n_nonCRT_participants, pct_participants_CRT, pct_nonCRT_participants) %>%
@@ -409,8 +406,6 @@ vars_reporting <- c(
   "Risk of bias",
   "CRT-specific risk of bias"
 )
-
-# ensure variables exist
 vars_exist <- vars_reporting %in% names(df)
 if(!all(vars_exist)) {
   message("Warning: some variable names were not found. Missing: ",
@@ -485,8 +480,6 @@ vars_analysis <- c(
   # "Small sample correction",
   # "Covariate adjustment",
 )
-
-# ensure variables exist
 vars_exist <- vars_analysis %in% names(df)
 if(!all(vars_exist)) {
   message("Warning: some variable names were not found. Missing: ",
@@ -576,8 +569,6 @@ vars_analysis2 <- c(
   "Analysis approach",
   "Accounted for two-level clustering"
 )
-
-# ensure variables exist
 vars_exist <- vars_analysis2 %in% names(df)
 if(!all(vars_exist)) {
   message("Warning: some variable names were not found. Missing: ",
