@@ -13,7 +13,9 @@ format:
 editor: visual
 ---
 
-*! Preliminary data & results ! 10.11.2025*
+*! Preliminary data & results ! 15.11.2025*
+
+Screening, in duplicate, of a first batch yielded 14 IPDMAs that included at least 1 CRT in their meta-analysis. Total of 43 CRTs across the 14 IPDMAs.
 
 **Packages**
 
@@ -295,7 +297,7 @@ ggplot(trial_stack_df, aes(x = IPDMA_index, y = pct, fill = Type)) +
     y = "Percentage of trials",
     fill = NULL,
     title = "CRT vs Non-CRT trials per IPDMA",
-    caption = "Counts in stacked bars, percentage on y-axis"
+    caption = "Counts in stacked bars, percentage on y-axis. Grey line: Average across all."
   ) +
   theme_minimal() +
   theme(
@@ -325,7 +327,7 @@ ggplot(participant_stack_df, aes(x = IPDMA_index, y = pct, fill = Type)) +
     y = "Percentage of participants",
     fill = NULL,
     title = "CRT vs Non-CRT participants per IPDMA",
-    caption = "Counts in stacked bars, percentage on y-axis"
+    caption = "Counts in stacked bars, percentage on y-axis. Grey line: Average across all."
   ) +
   theme_minimal() +
   theme(
@@ -456,8 +458,8 @@ ggplot(likert_df, aes(x = Variable, y = percent, fill = Category)) +
             color = "white", size = 3) +
   coord_flip() +
   scale_fill_manual(values = category_colors, drop = FALSE) +
-  scale_y_continuous(labels = scales::percent_format(scale = 100)) +  # fix
-  labs(x = NULL, y = NULL, fill = NULL, title = "Reporting characteristics") +
+  scale_y_continuous(labels = scales::percent_format(scale = 100)) +
+  labs(x = NULL, y = NULL, fill = NULL) +
   theme_minimal(base_size = 13) +
   theme(
     axis.text.x = element_text(size = 11),
@@ -499,64 +501,6 @@ tbl_analysis <- df %>%
   bold_labels()
 
 tbl_analysis
-
-# # Reshape and calculate percentages
-# likert_df <- df %>%
-#   select(any_of(vars_analysis)) %>%
-#   pivot_longer(everything(), names_to = "Variable", values_to = "Category") %>%
-#   filter(!is.na(Category)) %>%
-#   mutate(
-#     # control order (top-down)
-#     Variable = factor(Variable, levels = rev(vars_analysis))
-#   ) %>%
-#   count(Variable, Category) %>%
-#   group_by(Variable) %>%
-#   mutate(percent = n / sum(n) * 100) %>%
-#   ungroup()
-# 
-# # Define legend order
-# category_levels <- c(
-#   "Continuous", "Binary", "Ordinal", "Time-to-event", "Combination",
-#   "Frequentist", "Bayesian",
-#   "Fixed", "Random",
-#   "No", "Yes"
-# )
-# 
-# category_colors <- c(
-#   "Continuous" = "#1f78b4",
-#   "Binary" = "#4a9bdc",
-#   "Ordinal" = "#6a5acd",
-#   "Time-to-event" = "#7442C8",
-#   "Combination" = "#9b59b6",
-#   "Frequentist" = "#e41a1c",
-#   "Bayesian" = "#ff7f00",
-#   "Fixed" = "#c69c6d",
-#   "Random" = "#8f6b42",
-#   "No" = "#D95F02",
-#   "Yes" = "#2E8B57"
-# )
-# 
-# # Convert Category to ordered factor
-# likert_df <- likert_df %>%
-#   mutate(Category = factor(Category, levels = category_levels))
-# 
-# # Plot
-# ggplot(likert_df, aes(x = Variable, y = percent, fill = Category)) +
-#   geom_col(position = "fill", color = "white", linewidth = 0.2) +
-#   geom_text(aes(label = n),
-#             position = position_fill(vjust = 0.5),
-#             color = "white", size = 3) +
-#   coord_flip() +
-#   scale_fill_manual(values = category_colors, drop = FALSE) +
-#   scale_y_continuous(labels = scales::percent_format(scale = 100)) +
-#   labs(x = NULL, y = NULL, fill = NULL, title = "Reporting characteristics") +
-#   theme_minimal(base_size = 13) +
-#   theme(
-#     axis.text.x = element_text(size = 11),
-#     axis.text.y = element_text(size = 11),
-#     legend.position = "bottom",
-#     panel.grid.major.y = element_blank()
-#   )
 
 ```
 
@@ -708,7 +652,7 @@ ggplot(participant_stack_df, aes(x = IPDMA_index, y = pct, fill = Type)) +
 
 ```
 
-# **(10) Details regarding the IPDMAs with one-stage approach that aimed to account for clustering**
+# **(10) Details regarding the one-stage IPDMAs that aimed to account for two-level clustering**
 
 ```{r}
 crt_stacked_onestage <- crt_stacked %>% 
@@ -728,40 +672,24 @@ IPDMA #1:
 
     -   trial-level intercept
 
-    -   cluster/ICU-level intercepts nested within trials
+    -   cluster-level intercepts nested within trials (or ICUs in individually randomized trials)
 
 -   Intervention as fixed effect
-
--   The model adjusts SEs to account for correlation - where it exists:
-
-    -   For IRTs: treatment independent, SEs stay small
-
-    -   For CRTs: treatment clustered, SEs inflated accordingly
 
 IPDMA #2 & #3:
 
 -   Time-to-event outcome
 
--   Cox PH shared frailty model with random effects for clusters/centres
+-   Cox PH shared frailty model with random effects for clusters (or sites in individually randomized trials)
 
 -   Intervention as fixed effect
 
--   Unclear if a single baseline hazard across all trials is assumed, or if this has been considered by:
-
-    -   stratifying baseline hazards by trial, or
-
-    -   including study-level frailties/random effects
+-   Unclear if a single baseline hazard across all trials was assumed
 
 IPDMA #4:
 
 -   Continuous outcome
 
--   Generalized Estimating Equations and trial as fixed factor (separate intercepts)
+-   Generalized Estimating Equations to account for clustering within trials (if exists) and trial as fixed effect (separate intercepts)
 
 -   Intervention as fixed effect
-
--   The model adjusts SEs to account for correlation - where it exists:
-
-    -   For IRTs: treatment independent, SEs stay small
-
-    -   For CRTs: treatment clustered, SEs inflated accordingly
